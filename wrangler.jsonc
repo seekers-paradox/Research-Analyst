@@ -1,0 +1,19 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "research-analyst",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "ai": { "binding": "AI" },
+  "vars": {
+    // Any Workers AI text-generation model. Larger models (e.g.
+    // @cf/zai-org/glm-5.3) need the Workers Paid plan.
+    "AI_MODEL": "@cf/openai/gpt-oss-120b"
+  },
+  "observability": { "enabled": true }
+}

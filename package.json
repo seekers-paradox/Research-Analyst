@@ -1,22 +1,18 @@
 {
   "name": "research-analyst",
   "version": "0.1.0",
-  "description": "Researches a business and its competitors, then writes a playbook for how the business's AI employees should work.",
+  "description": "Cloudflare Worker that researches a business and its competitors, then writes a playbook for how the business's AI employees should work.",
   "type": "module",
-  "main": "server.js",
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.js",
-    "dev": "node --watch --env-file-if-exists=.env server.js",
-    "check": "node --check server.js && node --check src/intake.js && node --check src/prompts.js && node --check src/pipeline.js && node --check public/app.js"
-  },
-  "engines": {
-    "node": ">=20.12"
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "vendor": "cp node_modules/marked/lib/marked.umd.js node_modules/dompurify/dist/purify.min.js public/vendor/",
+    "check": "node --check src/worker.js && node --check src/intake.js && node --check src/prompts.js && node --check src/web.js && node --check public/app.js"
   },
   "license": "Apache-2.0",
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
+  "devDependencies": {
     "dompurify": "^3.4.16",
-    "express": "^5.2.1",
-    "marked": "^18.0.14"
+    "marked": "^18.0.14",
+    "wrangler": "^4.147.0"
   }
 }

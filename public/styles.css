@@ -7,6 +7,7 @@
   --accent: #2f5bd3;
   --accent-text: #ffffff;
   --error: #b42318;
+  --warn: #b54708;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -18,6 +19,7 @@
     --accent: #7c9cf0;
     --accent-text: #10131c;
     --error: #f97066;
+    --warn: #fdb022;
   }
 }
 
@@ -76,7 +78,18 @@ button:disabled { opacity: 0.6; cursor: wait; }
 .toolbar button { background: transparent; color: var(--text); border: 1px solid var(--border); font-weight: 500; }
 
 .errors { color: var(--error); margin: 0 0 12px; padding-left: 20px; }
-#log { color: var(--muted); font-size: 0.9rem; padding-left: 20px; max-height: 260px; overflow-y: auto; word-break: break-word; }
+.access { max-width: 280px; margin-bottom: 14px; }
+.bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-bottom: 12px; }
+#bar-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.4s ease; }
+#log li.warn { color: var(--warn); }
+#log li.error { color: var(--error); font-weight: 600; }
+.toolbar { align-items: center; }
+.toolbar .spacer { flex: 1; }
+.toolbar button:disabled { opacity: 0.5; cursor: default; }
+.tabs { display: flex; gap: 4px; }
+.tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.pending { color: var(--muted); font-style: italic; padding: 8px 0; }
+#log { color: var(--muted); font-size: 0.9rem; padding-left: 32px; max-height: 260px; overflow-y: auto; word-break: break-word; }
 
 .markdown { overflow-wrap: anywhere; }
 .markdown table { border-collapse: collapse; display: block; overflow-x: auto; margin: 12px 0; }
@@ -86,6 +99,7 @@ button:disabled { opacity: 0.6; cursor: wait; }
 .markdown h2 { font-size: 1.3rem; margin-top: 28px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
 
 @media print {
-  .topbar, #progress, .toolbar, #saved, form { display: none !important; }
+  .topbar, #progress, .toolbar, form { display: none !important; }
+  #dossier { break-before: page; }
   body, section { background: #fff; color: #000; border: 0; }
 }

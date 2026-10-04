@@ -9,7 +9,7 @@
 <body>
   <header class="topbar">
     <h1>Research Analyst</h1>
-    <p>Researches your business and its competitors, then writes a playbook for how your AI employees should work.</p>
+    <p>Researches your business and its competitors, then writes a playbook for how your AI employees should work. Fields marked * are required.</p>
   </header>
 
   <main>
@@ -59,7 +59,7 @@
           <label class="wide">What the business does<textarea name="description" rows="3"></textarea></label>
           <label class="wide">Main products or services<textarea name="productsServices" rows="2"></textarea></label>
           <label class="wide">Target customers<textarea name="targetCustomers" rows="2" placeholder="Who buys from you? Age, location, needs, B2B or B2C…"></textarea></label>
-          <label class="wide">Known competitors<textarea name="knownCompetitors" rows="2" placeholder="Names or websites, one per line"></textarea></label>
+          <label class="wide">Known competitors<textarea name="knownCompetitors" rows="2" placeholder="Websites work best, one per line, e.g. rivalpizza.com"></textarea></label>
           <label>Years in business<input name="yearsInBusiness"></label>
           <label>Team size<input name="teamSize" placeholder="e.g. 12"></label>
           <label>Annual revenue range
@@ -82,25 +82,30 @@
       </section>
 
       <div class="actions">
+        <label id="access-code-field" class="access" hidden>Access code<input name="accessCode" type="password" autocomplete="current-password"></label>
         <ul id="form-errors" class="errors" hidden></ul>
         <button type="submit" id="submit">Research &amp; generate report</button>
-        <p class="hint">Research usually takes 3–10 minutes.</p>
+        <p class="hint">Usually takes 3–8 minutes. Keep this tab open while it runs.</p>
       </div>
     </form>
 
     <section id="progress" hidden>
       <h2 id="phase">Starting…</h2>
+      <div class="bar"><div id="bar-fill"></div></div>
       <ol id="log"></ol>
     </section>
 
     <section id="output" hidden>
       <div class="toolbar">
-        <button type="button" id="download">Download Markdown</button>
-        <button type="button" id="print">Print / Save as PDF</button>
-        <button type="button" id="toggle-dossier">Show research dossier</button>
+        <div class="tabs" role="tablist">
+          <button type="button" role="tab" id="tab-report" aria-selected="true">Playbook</button>
+          <button type="button" role="tab" id="tab-dossier" aria-selected="false">Research dossier</button>
+        </div>
+        <span class="spacer"></span>
+        <button type="button" id="download" disabled>Download Markdown</button>
+        <button type="button" id="print" disabled>Print / Save as PDF</button>
         <button type="button" id="restart">New report</button>
       </div>
-      <p id="saved" class="hint"></p>
       <article id="report" class="markdown"></article>
       <article id="dossier" class="markdown" hidden></article>
     </section>
