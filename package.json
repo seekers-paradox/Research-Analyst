@@ -1,0 +1,22 @@
+{
+  "name": "research-analyst",
+  "version": "0.1.0",
+  "description": "Researches a business and its competitors, then writes a playbook for how the business's AI employees should work.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --watch --env-file-if-exists=.env server.js",
+    "check": "node --check server.js && node --check src/intake.js && node --check src/prompts.js && node --check src/pipeline.js && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=20.12"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "dompurify": "^3.4.16",
+    "express": "^5.2.1",
+    "marked": "^18.0.14"
+  }
+}
