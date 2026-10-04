@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const form = $("intake");
-const state = { config: null, accessCode: "", running: false, dossier: "", sections: [], businessName: "" };
+const state = { config: null, accessCode: "", running: false, markdown: "", businessName: "", editing: false };
 
 // ---------- small helpers ----------
 
@@ -44,6 +44,18 @@ function showErrors(errors) {
   list.hidden = errors.length === 0;
 }
 
+function hostOf(url) {
+  try {
+    return new URL(/^https?:/i.test(url) ? url : `https://${url}`).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function simplify(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\b(the|inc|llc|co|ltd)\b/g, "").trim();
+}
+
 // Runs async tasks with a concurrency limit, preserving result order.
 async function pool(items, limit, fn) {
   const results = new Array(items.length);
@@ -56,6 +68,18 @@ async function pool(items, limit, fn) {
   });
   await Promise.all(workers);
   return results;
+}
+
+// Errors that will not fix themselves on retry, and stop the whole report.
+const FATAL = [400, 401, 402, 429];
+
+async function withRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (FATAL.includes(err.status)) throw err;
+    return fn();
+  }
 }
 
 // ---------- API calls ----------
@@ -121,214 +145,6 @@ async function aiStream(body, onText = () => {}) {
   return text;
 }
 
-// Retries a step once, except for errors that will not fix themselves.
-async function withRetry(fn) {
-  try {
-    return await fn();
-  } catch (err) {
-    if ([400, 401, 402, 429].includes(err.status)) throw err;
-    return fn();
-  }
-}
-
-// ---------- research pipeline ----------
-
-const SUBPAGE_HINTS = /about|service|product|menu|pricing|price|team|staff|contact|location|career|jobs|faq|review|testimonial|blog/i;
-
-function pickSubpages(home, limit) {
-  const scored = home.links
-    .filter((l) => SUBPAGE_HINTS.test(l.url) || SUBPAGE_HINTS.test(l.text))
-    .filter((l) => new URL(l.url).pathname.replace(/\/$/, "") !== new URL(home.url).pathname.replace(/\/$/, ""));
-  const seen = new Set();
-  const picked = [];
-  for (const l of scored) {
-    const key = (l.url.match(SUBPAGE_HINTS) || l.text.match(SUBPAGE_HINTS) || [""])[0].toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    picked.push(l);
-    if (picked.length >= limit) break;
-  }
-  return picked;
-}
-
-function hostOf(url) {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
-
-function parseCompetitors(text, ownHost) {
-  const list = [];
-  const hosts = new Set([ownHost]);
-  for (const line of text.split("\n")) {
-    const parts = line.replace(/^[\s*\-\d.)]+/, "").split("|").map((s) => s.trim());
-    if (parts.length < 2 || !parts[0]) continue;
-    let url = null;
-    if (/^https?:\/\//i.test(parts[1])) {
-      const host = hostOf(parts[1]);
-      if (host && !hosts.has(host)) {
-        hosts.add(host);
-        url = parts[1];
-      } else if (host) continue;
-    }
-    list.push({ name: parts[0].replace(/\*\*/g, ""), url, reason: parts[2] || "" });
-    if (list.length >= 6) break;
-  }
-  return list;
-}
-
-async function readPage(url, label, maxText) {
-  try {
-    const page = await withRetry(() => api("/api/page", { url }));
-    log(`Read ${label}: ${page.url}`);
-    return { ...page, label, text: page.text.slice(0, maxText), links: undefined };
-  } catch (err) {
-    log(`Skipped ${label}: ${err.message}`, "warn");
-    return null;
-  }
-}
-
-async function runSearch(query) {
-  try {
-    const { results } = await withRetry(() => api("/api/search", { query }));
-    log(`Searched “${query}”: ${results.length} results`);
-    return { query, results };
-  } catch (err) {
-    log(`Search “${query}” failed: ${err.message}`, "warn");
-    return { query, results: [] };
-  }
-}
-
-async function run(intake) {
-  state.running = true;
-  state.dossier = "";
-  state.sections = [];
-  state.businessName = intake.businessName;
-  const where = [intake.city, intake.state].filter(Boolean).join(" ");
-  const pages = [];
-
-  // 1. The business's own website.
-  setPhase("Reading your website…", 0.03);
-  const home = await withRetry(() => api("/api/page", { url: intake.website })).catch((err) => {
-    log(`Could not read the website: ${err.message}`, "warn");
-    return null;
-  });
-  if (home) {
-    log(`Read website: ${home.url}`);
-    pages.push({ ...home, label: "Business website (home)", text: home.text.slice(0, 10000), links: undefined });
-    const subpages = pickSubpages(home, 4);
-    const read = await pool(subpages, 4, (l) => readPage(l.url, "Business website", 6000));
-    pages.push(...read.filter(Boolean));
-  }
-
-  // 2. Search for the business, its market, and named competitors.
-  const named = (intake.knownCompetitors || "").split(/\n|,|;/).map((s) => s.trim()).filter(Boolean).slice(0, 5);
-  const isUrl = (s) => /^https?:|^[\w-]+(\.[\w-]+)+(\/|$)/i.test(s);
-  let searches = [];
-  if (state.config.searchProvider === "none") {
-    log("Web search is not configured, so competitors come from your list only.", "warn");
-  } else {
-    setPhase("Searching the web…", 0.12);
-    const queries = [
-      `${intake.businessName} ${intake.city}`,
-      `${intake.businessName} reviews`,
-      `best ${intake.category} in ${where}`,
-      `${intake.category} ${where}`,
-      `${intake.businessName} jobs careers`,
-      ...named.slice(0, 3).map((c) => (isUrl(c) ? c : `${c} ${intake.city}`)),
-    ];
-    searches = await pool(queries, 3, runSearch);
-  }
-
-  // 3. Identify competitors and read their websites.
-  let competitors = named.map((c) => (isUrl(c) ? { name: hostOf(/^https?:/i.test(c) ? c : `https://${c}`), url: /^https?:/i.test(c) ? c : `https://${c}` } : { name: c, url: null }));
-  if (searches.some((s) => s.results.length)) {
-    setPhase("Identifying competitors…", 0.25);
-    try {
-      const text = await withRetry(() => aiStream({ task: "competitors", intake, searches }));
-      const found = parseCompetitors(text, hostOf(home?.url || intake.website));
-      const known = new Set(competitors.map((c) => hostOf(c.url || "") || c.name.toLowerCase()));
-      competitors.push(...found.filter((c) => !known.has(hostOf(c.url || "") || c.name.toLowerCase())));
-    } catch (err) {
-      if ([401, 402, 429].includes(err.status)) throw err;
-      log(`Could not identify competitors: ${err.message}`, "warn");
-    }
-  }
-  log(`Competitors: ${competitors.map((c) => c.name).join(", ") || "none identified"}`);
-  setPhase("Reading competitor websites…", 0.32);
-  const withSites = competitors.filter((c) => c.url).slice(0, 5);
-  const compPages = await pool(withSites, 4, (c) => readPage(c.url, `Competitor: ${c.name}`, 5000));
-  pages.push(...compPages.filter(Boolean));
-
-  // 4. Research dossier.
-  setPhase("Writing the research dossier…", 0.4);
-  showOutput("dossier");
-  state.dossier = cleanMarkdown(
-    await withRetry(() => aiStream({ task: "dossier", intake, pages, searches }, (t) => scheduleRender($("dossier"), t))),
-  );
-  render($("dossier"), state.dossier);
-  log("Research dossier complete.");
-
-  // 5. Playbook sections, a few at a time.
-  const plan = [
-    { section: "overview", title: "Overview" },
-    ...intake.aiEmployees.map((role) => ({ section: "role", role, title: state.config.aiEmployees[role] })),
-    { section: "operations", title: "Operations plan" },
-  ];
-  const report = $("report");
-  report.innerHTML = "";
-  const slots = plan.map((step, i) => {
-    if (step.section === "role" && plan[i - 1].section !== "role") {
-      const h = document.createElement("h2");
-      h.textContent = "AI employee playbooks";
-      report.appendChild(h);
-    }
-    const div = document.createElement("div");
-    div.className = "pending";
-    div.textContent = `Waiting: ${step.title}…`;
-    report.appendChild(div);
-    return div;
-  });
-  selectTab("report");
-
-  let finished = 0;
-  setPhase(`Writing the playbook (0 of ${plan.length} sections)…`, 0.5);
-  state.sections = await pool(plan, 3, async (step, i) => {
-    slots[i].className = "";
-    const text = await withRetry(() =>
-      aiStream({ task: "section", intake, dossier: state.dossier, section: step.section, role: step.role }, (t) =>
-        scheduleRender(slots[i], t),
-      ),
-    ).catch((err) => {
-      if ([401, 402, 429].includes(err.status)) throw err;
-      log(`Section “${step.title}” failed: ${err.message}`, "warn");
-      return `### ${step.title}\n\n_This section could not be generated: ${err.message}_`;
-    });
-    const md = cleanMarkdown(text);
-    render(slots[i], md);
-    finished++;
-    log(`Finished: ${step.title}`);
-    setPhase(`Writing the playbook (${finished} of ${plan.length} sections)…`, 0.5 + (0.5 * finished) / plan.length);
-    return { ...step, markdown: md };
-  });
-
-  setPhase("Report ready", 1);
-  $("download").disabled = false;
-  $("print").disabled = false;
-  state.running = false;
-}
-
-function fullMarkdown() {
-  const parts = [];
-  state.sections.forEach((s, i) => {
-    if (s.section === "role" && state.sections[i - 1]?.section !== "role") parts.push("## AI employee playbooks");
-    parts.push(s.markdown);
-  });
-  return `${parts.join("\n\n")}\n\n---\n\n# Appendix: Research dossier\n\n${state.dossier}\n`;
-}
-
 // Re-rendering on every streamed token is slow; batch to animation frames.
 const pendingRenders = new Map();
 function scheduleRender(el, markdown) {
@@ -341,29 +157,210 @@ function scheduleRender(el, markdown) {
   });
 }
 
-// ---------- UI wiring ----------
+// ---------- research ----------
 
-function selectTab(name) {
-  const report = name === "report";
-  $("report").hidden = !report;
-  $("dossier").hidden = report;
-  $("tab-report").setAttribute("aria-selected", String(report));
-  $("tab-dossier").setAttribute("aria-selected", String(!report));
+const SUBPAGE_HINTS = /about|service|product|menu|pricing|price|contact|faq|book|appointment|location/i;
+
+function pickSubpages(home, limit) {
+  const homePath = new URL(home.url).pathname.replace(/\/$/, "");
+  const seen = new Set();
+  const picked = [];
+  for (const l of home.links) {
+    const hit = l.url.match(SUBPAGE_HINTS) || l.text.match(SUBPAGE_HINTS);
+    if (!hit || new URL(l.url).pathname.replace(/\/$/, "") === homePath) continue;
+    const key = hit[0].toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(l);
+    if (picked.length >= limit) break;
+  }
+  return picked;
 }
 
-function showOutput(tab) {
+async function readPage(url, label, maxText) {
+  try {
+    const page = await withRetry(() => api("/api/page", { url }));
+    log(`Read ${label}: ${page.url}`);
+    return { ...page, text: page.text.slice(0, maxText) };
+  } catch (err) {
+    log(`Skipped ${label}: ${err.message}`, "warn");
+    return null;
+  }
+}
+
+async function readWebsite(intake) {
+  setPhase("Reading the website…", 0.05);
+  const home = await readPage(intake.website, "website", 8000);
+  if (!home) return { home: null, pages: [] };
+  const subpages = await pool(pickSubpages(home, 3), 3, (l) => readPage(l.url, "page", 4000));
+  const strip = ({ links, ...page }) => page;
+  return { home, pages: [home, ...subpages.filter(Boolean)].map(strip) };
+}
+
+// Google Places: the business's own listing plus nearby businesses in the
+// same category, with ratings and review counts.
+async function findWithPlaces(intake, ownHost) {
+  setPhase("Looking up the business and nearby competitors…", 0.2);
+  const isSelf = (p) => (ownHost && hostOf(p.website) === ownHost) || simplify(p.name) === simplify(intake.businessName);
+
+  let business = null;
+  try {
+    const { places } = await withRetry(() =>
+      api("/api/places", { query: `${intake.businessName} ${intake.city}`, withReviews: true, limit: 5 }),
+    );
+    business = places.find(isSelf) || null;
+    log(business ? `Found listing: ${business.name} (${business.rating ?? "no"}★, ${business.reviewCount} reviews)` : "No Google listing matched the business.", business ? "" : "warn");
+  } catch (err) {
+    if (FATAL.includes(err.status)) throw err;
+    log(err.message, "warn");
+  }
+
+  let competitors = [];
+  try {
+    const { places } = await withRetry(() => api("/api/places", { query: `${intake.category} in ${intake.city}`, limit: 12 }));
+    competitors = places.filter((p) => !isSelf(p) && p.status !== "CLOSED_PERMANENTLY").slice(0, 5);
+    log(`Nearby competitors: ${competitors.map((c) => c.name).join(", ") || "none found"}`);
+  } catch (err) {
+    if (FATAL.includes(err.status)) throw err;
+    log(err.message, "warn");
+  }
+
+  setPhase("Reading competitor websites…", 0.3);
+  await pool(competitors.filter((c) => c.website).slice(0, 3), 3, async (c) => {
+    const page = await readPage(c.website, `competitor ${c.name}`, 2500);
+    if (page) c.siteText = [page.title, page.description, page.text].filter(Boolean).join(" — ").slice(0, 2500);
+  });
+  return { business, competitors, searches: [] };
+}
+
+// Brave web search: pick competitors from search results.
+async function findWithSearch(intake, ownHost) {
+  setPhase("Searching the web…", 0.2);
+  const queries = [`${intake.businessName} ${intake.city}`, `${intake.businessName} reviews`, `best ${intake.category} in ${intake.city}`];
+  const searches = await pool(queries, 3, async (query) => {
+    try {
+      const { results } = await withRetry(() => api("/api/search", { query }));
+      log(`Searched “${query}”: ${results.length} results`);
+      return { query, results };
+    } catch (err) {
+      log(`Search “${query}” failed: ${err.message}`, "warn");
+      return { query, results: [] };
+    }
+  });
+
+  let competitors = [];
+  if (searches.some((s) => s.results.length)) {
+    setPhase("Identifying competitors…", 0.28);
+    try {
+      const text = await withRetry(() => aiStream({ task: "competitors", intake, searches }));
+      for (const line of text.split("\n")) {
+        const [name, url] = line.replace(/^[\s*\-\d.)]+/, "").split("|").map((s) => s.trim());
+        if (!name || !url) continue;
+        const website = /^https?:\/\//i.test(url) && hostOf(url) !== ownHost ? url : "";
+        competitors.push({ name: name.replace(/\*\*/g, ""), website });
+        if (competitors.length >= 5) break;
+      }
+      log(`Competitors: ${competitors.map((c) => c.name).join(", ") || "none identified"}`);
+    } catch (err) {
+      if (FATAL.includes(err.status)) throw err;
+      log(`Could not identify competitors: ${err.message}`, "warn");
+    }
+  }
+  await pool(competitors.filter((c) => c.website).slice(0, 3), 3, async (c) => {
+    const page = await readPage(c.website, `competitor ${c.name}`, 2500);
+    if (page) c.siteText = [page.title, page.description, page.text].filter(Boolean).join(" — ").slice(0, 2500);
+  });
+  return { business: null, competitors, searches };
+}
+
+// ---------- report ----------
+
+function reportHeader(intake) {
+  const date = new Date().toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  return `# AI Employee Onboarding Report: ${intake.businessName}
+
+_${intake.category} · ${intake.city} · ${hostOf(intake.website)} · ${date}_
+
+> This report shows what we found about your business and how we plan to set up your AI Receptionist, AI Social Media, and AI Blogger. Please review it and tell us what is wrong or missing. Your answers shape how your AI employees work.`;
+}
+
+async function run(intake) {
+  state.running = true;
+  state.businessName = intake.businessName;
+  const ownHost = hostOf(intake.website);
+
+  // 1. Research.
+  const { home, pages } = await readWebsite(intake);
+  let found;
+  if (state.config.placesEnabled) found = await findWithPlaces(intake, hostOf(home?.url || "") || ownHost);
+  else if (state.config.searchProvider !== "none") found = await findWithSearch(intake, ownHost);
+  else {
+    log("Local competitor search is not configured, so competitors will be suggested by the AI for the client to confirm.", "warn");
+    found = { business: null, competitors: [], searches: [] };
+  }
+
+  // 2. Build the report on the page section by section.
+  const report = $("report");
+  report.innerHTML = "";
+  const header = reportHeader(intake);
+  const addSlot = (label) => {
+    const div = document.createElement("div");
+    div.className = "pending";
+    div.textContent = `Waiting: ${label}…`;
+    report.appendChild(div);
+    return div;
+  };
+  render(addSlot(""), header);
+  const findingsSlot = addSlot("What we found");
+  const rolesHeading = document.createElement("h2");
+  rolesHeading.textContent = "Your AI employees";
+  report.appendChild(rolesHeading);
+  const roles = Object.entries(state.config.aiEmployees);
+  const roleSlots = roles.map(([, label]) => addSlot(label));
+  const reviewSlot = addSlot("Please review");
+  report.firstElementChild.className = "";
   $("output").hidden = false;
-  selectTab(tab);
+
+  const write = async (slot, body, label) => {
+    slot.className = "";
+    try {
+      const text = await withRetry(() => aiStream(body, (t) => scheduleRender(slot, t)));
+      const md = cleanMarkdown(text);
+      render(slot, md);
+      log(`Finished: ${label}`);
+      return md;
+    } catch (err) {
+      if (FATAL.includes(err.status)) throw err;
+      log(`${label} failed: ${err.message}`, "warn");
+      const md = `_The “${label}” section could not be generated: ${err.message}_`;
+      render(slot, md);
+      return md;
+    }
+  };
+
+  setPhase("Writing what we found…", 0.4);
+  const findings = await write(findingsSlot, { task: "findings", intake, research: { ...found, pages } }, "What we found");
+
+  setPhase("Planning the AI employees…", 0.6);
+  const roleSections = await pool(roles, 3, ([role, label], i) =>
+    write(roleSlots[i], { task: "role", intake, findings, role }, label),
+  );
+
+  setPhase("Writing the review checklist…", 0.85);
+  const body = [findings, "## Your AI employees", ...roleSections].join("\n\n");
+  const review = await write(reviewSlot, { task: "review", intake, report: body }, "Please review");
+
+  state.markdown = [header, body, review].join("\n\n") + "\n";
+  render(report, state.markdown);
+  setPhase("Report ready", 1);
+  for (const id of ["edit", "download", "print"]) $(id).disabled = false;
+  state.running = false;
 }
 
-$("tab-report").addEventListener("click", () => selectTab("report"));
-$("tab-dossier").addEventListener("click", () => selectTab("dossier"));
+// ---------- UI wiring ----------
 
 async function loadConfig() {
   state.config = await fetch("/api/config").then((r) => r.json());
-  $("employees").innerHTML = Object.entries(state.config.aiEmployees)
-    .map(([id, label]) => `<label><input type="checkbox" name="aiEmployees" value="${id}" checked> ${label}</label>`)
-    .join("");
   if (state.config.accessCodeRequired) {
     $("access-code-field").hidden = false;
     form.accessCode.value = storage((s) => s.getItem("accessCode")) || "";
@@ -374,17 +371,15 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (state.running) return;
   const data = Object.fromEntries(new FormData(form));
-  data.aiEmployees = [...form.querySelectorAll("input[name=aiEmployees]:checked")].map((el) => el.value);
   state.accessCode = data.accessCode || "";
   delete data.accessCode;
 
   const missing = [...form.querySelectorAll("[required]")].filter((el) => !el.value.trim());
   if (missing.length) {
-    showErrors(missing.map((el) => `${el.parentElement.firstChild.textContent.replace("*", "").trim()} is required.`));
+    showErrors(missing.map((el) => `${el.parentElement.firstChild.textContent.trim()} is required.`));
     missing[0].focus();
     return;
   }
-  if (data.aiEmployees.length === 0) return showErrors(["Choose at least one AI employee."]);
 
   $("submit").disabled = true;
   try {
@@ -396,18 +391,13 @@ form.addEventListener("submit", async (event) => {
   $("submit").disabled = false;
   showErrors([]);
   if (state.accessCode) storage((s) => s.setItem("accessCode", state.accessCode));
-
-  // The server normalizes the website (adds https://); mirror that here.
   if (!/^https?:\/\//i.test(data.website)) data.website = `https://${data.website.trim()}`;
 
   form.hidden = true;
   $("progress").hidden = false;
   $("output").hidden = true;
   $("log").innerHTML = "";
-  $("report").innerHTML = "";
-  $("dossier").innerHTML = "";
-  $("download").disabled = true;
-  $("print").disabled = true;
+  for (const id of ["edit", "download", "print"]) $(id).disabled = true;
   window.scrollTo(0, 0);
 
   try {
@@ -420,21 +410,31 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+$("edit").addEventListener("click", () => {
+  state.editing = !state.editing;
+  if (state.editing) {
+    $("editor").value = state.markdown;
+    $("editor").style.height = `${Math.max(400, $("report").offsetHeight)}px`;
+  } else {
+    state.markdown = $("editor").value;
+    render($("report"), state.markdown);
+  }
+  $("editor").hidden = !state.editing;
+  $("report").hidden = state.editing;
+  $("edit").textContent = state.editing ? "Done editing" : "Edit report";
+  $("download").disabled = $("print").disabled = state.editing;
+});
+
 $("download").addEventListener("click", () => {
-  const blob = new Blob([fullMarkdown()], { type: "text/markdown" });
+  const blob = new Blob([state.markdown], { type: "text/markdown" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = `${(state.businessName || "report").replace(/[^a-z0-9]+/gi, "-")}-ai-playbook.md`;
+  a.download = `${(state.businessName || "report").replace(/[^a-z0-9]+/gi, "-")}-onboarding-report.md`;
   a.click();
   URL.revokeObjectURL(a.href);
 });
 
-$("print").addEventListener("click", () => {
-  selectTab("report");
-  $("dossier").hidden = false; // include the dossier as an appendix when printing
-  window.print();
-  $("dossier").hidden = true;
-});
+$("print").addEventListener("click", () => window.print());
 
 $("restart").addEventListener("click", () => {
   if (state.running && !confirm("A report is still being written. Start over anyway?")) return;
@@ -442,7 +442,7 @@ $("restart").addEventListener("click", () => {
 });
 
 window.addEventListener("beforeunload", (e) => {
-  if (state.running) e.preventDefault();
+  if (state.running || state.editing) e.preventDefault();
 });
 
 loadConfig();

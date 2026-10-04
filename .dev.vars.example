@@ -1,3 +1,4 @@
 # Optional secrets. For production set them with: npx wrangler secret put NAME
 # ACCESS_CODE=choose-a-code        # require this code before anyone can run a report
-# BRAVE_API_KEY=...                # better competitor search (https://brave.com/search/api/)
+# GOOGLE_PLACES_API_KEY=...        # business listing + nearby competitors (Places API (New))
+# BRAVE_API_KEY=...                # web search fallback (https://brave.com/search/api/)

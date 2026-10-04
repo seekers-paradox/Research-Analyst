@@ -9,84 +9,33 @@
 <body>
   <header class="topbar">
     <h1>Research Analyst</h1>
-    <p>Researches your business and its competitors, then writes a playbook for how your AI employees should work. Fields marked * are required.</p>
+    <p>Enter four details. We research the business and its nearby competitors, then write a short onboarding report for the AI Receptionist, AI Social Media, and AI Blogger that the client can review.</p>
   </header>
 
   <main>
     <form id="intake" novalidate>
       <section>
-        <h2>1. Business identity <span class="hint">required</span></h2>
         <div class="grid">
-          <label>Business name *<input name="businessName" required autocomplete="organization"></label>
-          <label>Website *<input name="website" required placeholder="example.com" inputmode="url"></label>
-          <label>Business category *<input name="category" required list="categories" placeholder="e.g. Dental clinic"></label>
+          <label>Business name<input name="businessName" required autocomplete="organization"></label>
+          <label>Website<input name="website" required placeholder="example.com" inputmode="url"></label>
+          <label>Business category<input name="category" required list="categories" placeholder="e.g. Dental clinic"></label>
+          <label>City<input name="city" required placeholder="e.g. Kansas City, MO" autocomplete="address-level2"></label>
         </div>
         <datalist id="categories">
-          <option>Restaurant / Café</option><option>Retail store</option><option>E-commerce</option>
-          <option>Dental clinic</option><option>Medical practice</option><option>Salon / Spa</option>
-          <option>Fitness studio / Gym</option><option>Real estate agency</option><option>Law firm</option>
-          <option>Accounting / Bookkeeping</option><option>Marketing agency</option><option>Home services (plumbing, HVAC, electrical)</option>
-          <option>Construction / Contractor</option><option>Auto repair</option><option>Education / Tutoring</option>
-          <option>SaaS / Software</option><option>Hotel / Hospitality</option><option>Nonprofit</option>
+          <option>Restaurant</option><option>Retail store</option><option>Dental clinic</option>
+          <option>Medical practice</option><option>Salon / Spa</option><option>Fitness studio</option>
+          <option>Real estate agency</option><option>Law firm</option><option>Accounting firm</option>
+          <option>Home builder</option><option>Plumber</option><option>HVAC contractor</option>
+          <option>Roofing contractor</option><option>Auto repair shop</option><option>Veterinary clinic</option>
+          <option>Insurance agency</option><option>Marketing agency</option><option>Hotel</option>
         </datalist>
-      </section>
-
-      <section>
-        <h2>2. Location</h2>
-        <div class="grid">
-          <label class="wide">Street address<input name="address" autocomplete="street-address"></label>
-          <label>City *<input name="city" required autocomplete="address-level2"></label>
-          <label>State / province<input name="state" autocomplete="address-level1"></label>
-          <label>Postal code<input name="postalCode" autocomplete="postal-code"></label>
-          <label>Country *<input name="country" required autocomplete="country-name" placeholder="e.g. US or United States"></label>
-          <label class="wide">Service area<input name="serviceArea" placeholder="e.g. 20-mile radius, nationwide, online only"></label>
-        </div>
-      </section>
-
-      <section>
-        <h2>3. Contact &amp; online presence</h2>
-        <div class="grid">
-          <label>Phone<input name="phone" type="tel" autocomplete="tel"></label>
-          <label>Business email<input name="email" type="email" autocomplete="email"></label>
-          <label class="wide">Google Business / Maps listing<input name="googleBusinessUrl" placeholder="https://maps.google.com/…"></label>
-          <label class="wide">Social media profiles<textarea name="socialLinks" rows="2" placeholder="One per line: Instagram, Facebook, LinkedIn, TikTok, YouTube…"></textarea></label>
-        </div>
-      </section>
-
-      <section>
-        <h2>4. About the business <span class="hint">optional, but makes the report much sharper</span></h2>
-        <div class="grid">
-          <label class="wide">What the business does<textarea name="description" rows="3"></textarea></label>
-          <label class="wide">Main products or services<textarea name="productsServices" rows="2"></textarea></label>
-          <label class="wide">Target customers<textarea name="targetCustomers" rows="2" placeholder="Who buys from you? Age, location, needs, B2B or B2C…"></textarea></label>
-          <label class="wide">Known competitors<textarea name="knownCompetitors" rows="2" placeholder="Websites work best, one per line, e.g. rivalpizza.com"></textarea></label>
-          <label>Years in business<input name="yearsInBusiness"></label>
-          <label>Team size<input name="teamSize" placeholder="e.g. 12"></label>
-          <label>Annual revenue range
-            <select name="revenueRange">
-              <option value="">Prefer not to say</option>
-              <option>Under $100K</option><option>$100K–$500K</option><option>$500K–$1M</option>
-              <option>$1M–$5M</option><option>$5M–$20M</option><option>Over $20M</option>
-            </select>
-          </label>
-          <label class="wide">Top goals for the next 12 months<textarea name="goals" rows="2" placeholder="e.g. more bookings, launch a new location, hire 3 staff"></textarea></label>
-          <label class="wide">Biggest challenges right now<textarea name="challenges" rows="2"></textarea></label>
-          <label class="wide">Brand voice / tone<input name="brandVoice" placeholder="e.g. friendly and professional, playful, luxury"></label>
-          <label class="wide">Tools and systems already in use<input name="toolsUsed" placeholder="e.g. Shopify, QuickBooks, HubSpot, Square, Mailchimp"></label>
-        </div>
-      </section>
-
-      <section>
-        <h2>5. AI employees to plan for</h2>
-        <div id="employees" class="checks"></div>
-      </section>
-
-      <div class="actions">
         <label id="access-code-field" class="access" hidden>Access code<input name="accessCode" type="password" autocomplete="current-password"></label>
         <ul id="form-errors" class="errors" hidden></ul>
-        <button type="submit" id="submit">Research &amp; generate report</button>
-        <p class="hint">Usually takes 3–8 minutes. Keep this tab open while it runs.</p>
-      </div>
+        <div class="actions-row">
+          <button type="submit" id="submit">Research &amp; create report</button>
+          <span class="hint">Takes about 1–3 minutes. Keep this tab open.</span>
+        </div>
+      </section>
     </form>
 
     <section id="progress" hidden>
@@ -97,17 +46,14 @@
 
     <section id="output" hidden>
       <div class="toolbar">
-        <div class="tabs" role="tablist">
-          <button type="button" role="tab" id="tab-report" aria-selected="true">Playbook</button>
-          <button type="button" role="tab" id="tab-dossier" aria-selected="false">Research dossier</button>
-        </div>
-        <span class="spacer"></span>
+        <button type="button" id="edit" disabled>Edit report</button>
         <button type="button" id="download" disabled>Download Markdown</button>
         <button type="button" id="print" disabled>Print / Save as PDF</button>
+        <span class="spacer"></span>
         <button type="button" id="restart">New report</button>
       </div>
+      <textarea id="editor" hidden spellcheck="true" aria-label="Edit report (Markdown)"></textarea>
       <article id="report" class="markdown"></article>
-      <article id="dossier" class="markdown" hidden></article>
     </section>
   </main>
 

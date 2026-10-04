@@ -1,13 +1,13 @@
 import { AI_EMPLOYEES, validateIntake } from "./intake.js";
-import { competitorsMessages, dossierMessages, sectionMessages } from "./prompts.js";
-import { fetchPage, search } from "./web.js";
+import { competitorsMessages, findingsMessages, reviewMessages, roleMessages } from "./prompts.js";
+import { fetchPage, placesSearch, search } from "./web.js";
 
 // The browser drives the research one small step at a time. Each step is its
 // own Worker request, which keeps every request inside the Free plan's CPU
 // and subrequest limits. AI output is streamed straight through to the
 // browser without being parsed here.
 
-const MAX_TOKENS = { competitors: 3000, dossier: 9000, section: 7000 };
+const MAX_TOKENS = { competitors: 3000, findings: 5000, role: 5000, review: 3000 };
 
 function json(data, status = 200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -27,19 +27,18 @@ function str(value, max) {
 
 function cleanPages(pages) {
   if (!Array.isArray(pages)) return [];
-  return pages.slice(0, 16).map((p) => ({
+  return pages.slice(0, 8).map((p) => ({
     url: str(p?.url, 500),
-    label: str(p?.label, 100),
     title: str(p?.title, 300),
     description: str(p?.description, 600),
-    text: str(p?.text, 12_000),
+    text: str(p?.text, 10_000),
     socials: Array.isArray(p?.socials) ? p.socials.slice(0, 12).map((s) => str(s, 300)) : [],
   }));
 }
 
 function cleanSearches(searches) {
   if (!Array.isArray(searches)) return [];
-  return searches.slice(0, 14).map((s) => ({
+  return searches.slice(0, 10).map((s) => ({
     query: str(s?.query, 300),
     results: (Array.isArray(s?.results) ? s.results : []).slice(0, 8).map((r) => ({
       title: str(r?.title, 300),
@@ -49,21 +48,50 @@ function cleanSearches(searches) {
   }));
 }
 
+function cleanPlace(p) {
+  if (!p || typeof p !== "object" || !p.name) return null;
+  return {
+    name: str(p.name, 200),
+    type: str(p.type, 100),
+    address: str(p.address, 300),
+    rating: typeof p.rating === "number" ? p.rating : null,
+    reviewCount: Number.isFinite(p.reviewCount) ? p.reviewCount : 0,
+    website: str(p.website, 300),
+    phone: str(p.phone, 50),
+    status: str(p.status, 50),
+    hours: Array.isArray(p.hours) ? p.hours.slice(0, 7).map((h) => str(h, 100)) : [],
+    reviews: (Array.isArray(p.reviews) ? p.reviews : []).slice(0, 5).map((r) => ({
+      rating: typeof r?.rating === "number" ? r.rating : null,
+      when: str(r?.when, 50),
+      text: str(r?.text, 600),
+    })),
+    siteText: str(p.siteText, 3000),
+  };
+}
+
 function buildMessages(body, intake) {
   switch (body.task) {
     case "competitors":
       return competitorsMessages(intake, cleanSearches(body.searches));
-    case "dossier":
-      return dossierMessages(intake, cleanPages(body.pages), cleanSearches(body.searches));
-    case "section": {
-      const dossier = str(body.dossier, 60_000);
-      if (!dossier) throw new Error("Missing research dossier");
-      if (body.section === "role") {
-        if (!(body.role in AI_EMPLOYEES)) throw new Error("Unknown AI employee");
-        return sectionMessages(intake, dossier, "role", body.role);
-      }
-      if (body.section !== "overview" && body.section !== "operations") throw new Error("Unknown section");
-      return sectionMessages(intake, dossier, body.section);
+    case "findings": {
+      const r = body.research ?? {};
+      return findingsMessages(intake, {
+        business: cleanPlace(r.business),
+        competitors: (Array.isArray(r.competitors) ? r.competitors : []).slice(0, 6).map(cleanPlace).filter(Boolean),
+        pages: cleanPages(r.pages),
+        searches: cleanSearches(r.searches),
+      });
+    }
+    case "role": {
+      const findings = str(body.findings, 20_000);
+      if (!findings) throw new Error("Missing findings");
+      if (!(body.role in AI_EMPLOYEES)) throw new Error("Unknown AI employee");
+      return roleMessages(intake, findings, body.role);
+    }
+    case "review": {
+      const report = str(body.report, 60_000);
+      if (!report) throw new Error("Missing report");
+      return reviewMessages(intake, report);
     }
     default:
       throw new Error("Unknown task");
@@ -108,6 +136,7 @@ async function handleApi(request, env, url) {
       aiEmployees: AI_EMPLOYEES,
       accessCodeRequired: Boolean(env.ACCESS_CODE),
       searchProvider: env.BRAVE_API_KEY ? "brave" : "none",
+      placesEnabled: Boolean(env.GOOGLE_PLACES_API_KEY),
       model: env.AI_MODEL,
     });
   }
@@ -138,6 +167,13 @@ async function handleApi(request, env, url) {
         return json(await search(body.query, env));
       } catch (err) {
         return fail(`Search failed: ${err.message}`, 502);
+      }
+    case "/api/places":
+      try {
+        const places = await placesSearch(body.query, env, { withReviews: body.withReviews === true, limit: Number(body.limit) || 8 });
+        return json({ places });
+      } catch (err) {
+        return fail(`Local search failed: ${err.message}`, 502);
       }
     case "/api/ai":
       return runAi(body, env);

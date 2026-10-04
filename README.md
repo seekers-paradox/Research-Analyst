@@ -1,48 +1,47 @@
 # Research-Analyst
 
-A Cloudflare Worker that researches a business and its competitors, then writes a detailed **AI Employee Playbook**: how each of the business's AI employees (social media, blog, SEO, HR, data analyst, support, sales, email, reputation) should work, what information they need, what they should ask the owner, and how to measure success.
+A Cloudflare Worker that turns four details (business name, website, category, city) into a short **AI Employee Onboarding Report** for the client to review. It covers three AI employees:
+
+- **AI Receptionist** (webchat, voice, SMS)
+- **AI Social Media** (writes social posts)
+- **AI Blogger** (writes blog posts for the website)
 
 **Live:** https://research-analyst.dayeshp.workers.dev
 
-It runs entirely on Cloudflare: the page is served as Workers static assets, and the writing is done by a [Workers AI](https://developers.cloudflare.com/workers-ai/) model (default `@cf/openai/gpt-oss-120b`).
+## The report
 
-## How it works
+1. **What we found about your business**: offer, customers, contact details, reputation, online presence, and the gaps that matter.
+2. **Your competitors nearby**: a table showing each competitor, its rating, what it does well, and where the client can stand out.
+3. **Your AI employees**: for each one, what it will do, **what it should collect from customers and why**, and **which integrations it needs**.
+4. **Please review**: specific questions for the client to confirm or correct, plus **what we need from you** (access, information, content).
 
-1. **Intake form**: the owner enters the business details (see below).
-2. **Research**: the Worker reads the business's website (home, About, Services, Jobs, Contact pages), runs web searches if a search key is configured, picks competitors, and reads their websites.
-3. **Research dossier**: Workers AI summarizes everything gathered, with sources.
-4. **Playbook**: Workers AI writes the report section by section (overview, one section per AI employee, operations plan), streaming into the page. Download it as Markdown or print/save it as PDF.
+A report is usually 4–6 pages and takes under a minute. Use **Edit report** to adjust it before downloading it or saving it as PDF for the client. The client's corrections then feed into onboarding.
 
-The browser runs these steps as a series of small Worker requests. That keeps each request inside the Workers Free plan limits (about 10 ms CPU and 50 subrequests per request). AI output streams straight through the Worker without being parsed.
+## How the research works
 
-## Information collected
+| Step | Source |
+|---|---|
+| Read the business website | The Worker fetches the home page plus About, Services, Contact, and similar pages |
+| Find the business's Google listing (rating, review count, hours, recent reviews) | Google Places API (`GOOGLE_PLACES_API_KEY`) |
+| Find nearby competitors | Google Places text search for "*category* in *city*", the same results you see on Google Maps, then reads their websites |
+| Fallback without Google Places | Brave web search (`BRAVE_API_KEY`). With neither key, the AI suggests competitors and marks them "suggested, please confirm" with ratings shown as "Not checked" |
+| Write the report | Workers AI (`AI_MODEL`, default `@cf/openai/gpt-oss-120b`): 5 calls per report |
 
-| Section | Fields | Why it's needed |
-|---|---|---|
-| Business identity *(required)* | Business name, website, category | Finds the business online and frames the competitor search |
-| Location | Street address, **city** *(required)*, state/province, postal code, **country** *(required)*, service area | Finds local competitors |
-| Contact & presence | Phone, email, Google Business listing, social profiles | Lets the research audit the right profiles |
-| About the business | What it does, products/services, target customers, known competitors, years in business, team size, revenue range, 12-month goals, challenges, brand voice, tools in use | Makes the recommendations specific instead of generic |
-| AI employees | Choose which roles to plan for | Sets which playbook sections are written |
+## Adding more AI employees
 
-## What the report contains
-
-- Executive summary and a business-vs-competitors comparison
-- **Growth intelligence**: which information streams to monitor and why
-- **One playbook per AI employee**: mission, responsibilities, information it needs, questions to ask the owner, how it should work, examples, KPIs, guardrails
-- How the AI employees work together, a master onboarding checklist, a 30/60/90-day rollout plan, and risks
-- Appendix: the research dossier with sources
+The covered roles are listed in `AI_EMPLOYEES` in `src/intake.js`, and each has a brief in `ROLE_BRIEFS` in `src/prompts.js`. To cover another AI employee, add one entry to each. The report adds a section for it automatically.
 
 ## Configuration
 
 | Setting | Where | Purpose |
 |---|---|---|
-| `AI_MODEL` | `vars` in `wrangler.jsonc` | Workers AI model. `@cf/openai/gpt-oss-120b` works on the Free plan. Stronger models such as `@cf/zai-org/glm-5.3` or `@cf/deepseek-ai/deepseek-v4-pro-0813` need the Workers Paid plan. |
-| `REASONING_EFFORT` | `vars` (optional) | `low` (default), `medium`, or `high` for gpt-oss models. Higher means better reasoning but more neurons. |
-| `BRAVE_API_KEY` | secret (optional, recommended) | Enables web search so competitors are found automatically. Get a key at https://brave.com/search/api/. Without it, competitors come only from the owner's "Known competitors" list. Free search-engine result pages block or degrade requests from Cloudflare. |
-| `ACCESS_CODE` | secret (optional) | When set, the form asks for this code before running. Use it to stop strangers from spending your Workers AI quota. |
+| `GOOGLE_PLACES_API_KEY` | secret (recommended) | Finds the business's Google listing and its nearby competitors with real ratings and review counts. In Google Cloud, enable **Places API (New)** and create an API key. |
+| `BRAVE_API_KEY` | secret (optional) | Web search fallback for competitors if Google Places isn't set up. |
+| `ACCESS_CODE` | secret (optional) | When set, the form asks for this code before running. |
+| `AI_MODEL` | `vars` in `wrangler.jsonc` | Workers AI model. `@cf/openai/gpt-oss-120b` works on the Free plan. Stronger models need the Workers Paid plan. |
+| `REASONING_EFFORT` | `vars` (optional) | `low` (default), `medium`, or `high` for gpt-oss models. |
 
-Set a secret with `npx wrangler secret put BRAVE_API_KEY`, or in the Cloudflare dashboard under **Workers & Pages → research-analyst → Settings → Variables and Secrets**.
+Set a secret with `npx wrangler secret put GOOGLE_PLACES_API_KEY`, or in the Cloudflare dashboard under **Workers & Pages → research-analyst → Settings → Variables and Secrets**.
 
 ## Develop and deploy
 
@@ -57,17 +56,17 @@ For local secrets, copy `.dev.vars.example` to `.dev.vars`.
 
 ## Cost and limits
 
-A full report (all nine AI employees) makes about 13 Workers AI calls. With gpt-oss-120b at low reasoning effort that is roughly 3,000–5,000 neurons. The Free plan includes 10,000 neurons per day, so expect about 2–3 full reports per day for free. Choosing fewer AI employees uses less. On the Paid plan, extra usage is billed at $0.011 per 1,000 neurons, about 5 cents per report.
+Each report makes 5 Workers AI calls, far fewer than the earlier long-form version. The Workers Free plan includes 10,000 neurons per day; on the Paid plan extra usage costs $0.011 per 1,000 neurons. Google Places bills per search (2 per report) after its monthly free allowance.
 
 ## Project layout
 
 ```
 wrangler.jsonc       Worker config: static assets, Workers AI binding, model
-src/worker.js        API routes: /api/config, /api/validate, /api/page, /api/search, /api/ai
-src/web.js           Page fetching and text extraction, Brave web search
-src/prompts.js       Prompts for competitor selection, dossier, and report sections
-src/intake.js        Intake fields, validation, AI employee roles
-public/              Intake form, report viewer, and vendored marked + DOMPurify
+src/worker.js        API routes: /api/config, /api/validate, /api/page, /api/places, /api/search, /api/ai
+src/web.js           Page fetching and text extraction, Google Places, Brave web search
+src/prompts.js       Prompts for findings, AI employee briefs, and the review checklist
+src/intake.js        The four intake fields, validation, and the AI employees covered
+public/              Form, report viewer and editor, vendored marked + DOMPurify
 ```
 
 ## Notes

@@ -99,7 +99,19 @@ button:disabled { opacity: 0.6; cursor: wait; }
 .markdown h2 { font-size: 1.3rem; margin-top: 28px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
 
 @media print {
-  .topbar, #progress, .toolbar, form { display: none !important; }
-  #dossier { break-before: page; }
+  .topbar, #progress, .toolbar, form, #editor { display: none !important; }
   body, section { background: #fff; color: #000; border: 0; }
 }
+
+.actions-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 16px; }
+.actions-row .hint { margin: 0; }
+.grid + .access { margin-top: 16px; }
+#editor {
+  width: 100%;
+  min-height: 400px;
+  font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  resize: vertical;
+}
+.markdown blockquote { margin: 12px 0; padding: 10px 14px; border-left: 4px solid var(--accent); background: var(--bg); border-radius: 0 6px 6px 0; }
+.markdown blockquote p { margin: 0; }
+.markdown h3 { margin-top: 24px; }

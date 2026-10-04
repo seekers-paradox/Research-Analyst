@@ -112,3 +112,59 @@ export async function search(query, env) {
   if (!env.BRAVE_API_KEY) throw new Error("Web search is not configured (set the BRAVE_API_KEY secret).");
   return { provider: "brave", results: await braveSearch(q, env.BRAVE_API_KEY) };
 }
+
+// Google Places (New) Text Search: finds the business's own listing and the
+// nearby businesses in the same category, with ratings and review counts.
+const PLACE_FIELDS = [
+  "places.displayName",
+  "places.formattedAddress",
+  "places.primaryTypeDisplayName",
+  "places.rating",
+  "places.userRatingCount",
+  "places.websiteUri",
+  "places.nationalPhoneNumber",
+  "places.businessStatus",
+  "places.googleMapsUri",
+  "places.regularOpeningHours.weekdayDescriptions",
+];
+
+export async function placesSearch(query, env, { withReviews = false, limit = 8 } = {}) {
+  if (!env.GOOGLE_PLACES_API_KEY) throw new Error("Local business search is not configured (set the GOOGLE_PLACES_API_KEY secret).");
+  const q = String(query ?? "").trim().slice(0, 300);
+  if (!q) throw new Error("Empty search query");
+
+  const fields = withReviews ? [...PLACE_FIELDS, "places.reviews"] : PLACE_FIELDS;
+  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": env.GOOGLE_PLACES_API_KEY,
+      "X-Goog-FieldMask": fields.join(","),
+    },
+    body: JSON.stringify({ textQuery: q, pageSize: Math.min(Math.max(limit, 1), 20) }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(`Google Places returned HTTP ${res.status}${detail.error?.message ? `: ${detail.error.message}` : ""}`);
+  }
+  const data = await res.json();
+
+  return (data.places ?? []).map((p) => ({
+    name: p.displayName?.text ?? "",
+    address: p.formattedAddress ?? "",
+    type: p.primaryTypeDisplayName?.text ?? "",
+    rating: p.rating ?? null,
+    reviewCount: p.userRatingCount ?? 0,
+    website: p.websiteUri ?? "",
+    phone: p.nationalPhoneNumber ?? "",
+    status: p.businessStatus ?? "",
+    mapsUrl: p.googleMapsUri ?? "",
+    hours: p.regularOpeningHours?.weekdayDescriptions ?? [],
+    reviews: (p.reviews ?? []).slice(0, 5).map((r) => ({
+      rating: r.rating ?? null,
+      when: r.relativePublishTimeDescription ?? "",
+      text: (r.text?.text ?? r.originalText?.text ?? "").slice(0, 600),
+    })),
+  }));
+}
