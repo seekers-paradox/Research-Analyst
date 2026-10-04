@@ -197,27 +197,36 @@ async function readWebsite(intake) {
   return { home, pages: [home, ...subpages.filter(Boolean)].map(strip) };
 }
 
-// Google Places: the business's own listing plus nearby businesses in the
-// same category, with ratings and review counts.
-async function findWithPlaces(intake, ownHost) {
-  setPhase("Looking up the business and nearby competitors…", 0.2);
+// SerpApi Google Maps search: the business's own listing and reviews, plus
+// nearby businesses in the same category with ratings and review counts.
+async function findWithSerpApi(intake, ownHost) {
+  setPhase("Looking up the business on Google Maps…", 0.2);
   const isSelf = (p) => (ownHost && hostOf(p.website) === ownHost) || simplify(p.name) === simplify(intake.businessName);
 
   let business = null;
   try {
-    const { places } = await withRetry(() =>
-      api("/api/places", { query: `${intake.businessName} ${intake.city}`, withReviews: true, limit: 5 }),
-    );
+    const { places } = await withRetry(() => api("/api/local", { query: `${intake.businessName} ${intake.city}`, limit: 5 }));
     business = places.find(isSelf) || null;
-    log(business ? `Found listing: ${business.name} (${business.rating ?? "no"}★, ${business.reviewCount} reviews)` : "No Google listing matched the business.", business ? "" : "warn");
+    log(business ? `Found listing: ${business.name} (${business.rating ?? "no"}★, ${business.reviewCount} reviews)` : "No Google Maps listing matched the business.", business ? "" : "warn");
   } catch (err) {
     if (FATAL.includes(err.status)) throw err;
     log(err.message, "warn");
   }
+  if (business?.dataId && business.reviewCount > 0 && business.reviews.length < 3) {
+    try {
+      const { reviews } = await withRetry(() => api("/api/reviews", { dataId: business.dataId }));
+      business.reviews = reviews;
+      log(`Read ${reviews.length} recent reviews.`);
+    } catch (err) {
+      if (FATAL.includes(err.status)) throw err;
+      log(err.message, "warn");
+    }
+  }
 
+  setPhase("Finding nearby competitors…", 0.28);
   let competitors = [];
   try {
-    const { places } = await withRetry(() => api("/api/places", { query: `${intake.category} in ${intake.city}`, limit: 12 }));
+    const { places } = await withRetry(() => api("/api/local", { query: `${intake.category} in ${intake.city}`, limit: 12 }));
     competitors = places.filter((p) => !isSelf(p) && p.status !== "CLOSED_PERMANENTLY").slice(0, 5);
     log(`Nearby competitors: ${competitors.map((c) => c.name).join(", ") || "none found"}`);
   } catch (err) {
@@ -225,52 +234,12 @@ async function findWithPlaces(intake, ownHost) {
     log(err.message, "warn");
   }
 
-  setPhase("Reading competitor websites…", 0.3);
+  setPhase("Reading competitor websites…", 0.33);
   await pool(competitors.filter((c) => c.website).slice(0, 3), 3, async (c) => {
     const page = await readPage(c.website, `competitor ${c.name}`, 2500);
     if (page) c.siteText = [page.title, page.description, page.text].filter(Boolean).join(" — ").slice(0, 2500);
   });
-  return { business, competitors, searches: [] };
-}
-
-// Brave web search: pick competitors from search results.
-async function findWithSearch(intake, ownHost) {
-  setPhase("Searching the web…", 0.2);
-  const queries = [`${intake.businessName} ${intake.city}`, `${intake.businessName} reviews`, `best ${intake.category} in ${intake.city}`];
-  const searches = await pool(queries, 3, async (query) => {
-    try {
-      const { results } = await withRetry(() => api("/api/search", { query }));
-      log(`Searched “${query}”: ${results.length} results`);
-      return { query, results };
-    } catch (err) {
-      log(`Search “${query}” failed: ${err.message}`, "warn");
-      return { query, results: [] };
-    }
-  });
-
-  let competitors = [];
-  if (searches.some((s) => s.results.length)) {
-    setPhase("Identifying competitors…", 0.28);
-    try {
-      const text = await withRetry(() => aiStream({ task: "competitors", intake, searches }));
-      for (const line of text.split("\n")) {
-        const [name, url] = line.replace(/^[\s*\-\d.)]+/, "").split("|").map((s) => s.trim());
-        if (!name || !url) continue;
-        const website = /^https?:\/\//i.test(url) && hostOf(url) !== ownHost ? url : "";
-        competitors.push({ name: name.replace(/\*\*/g, ""), website });
-        if (competitors.length >= 5) break;
-      }
-      log(`Competitors: ${competitors.map((c) => c.name).join(", ") || "none identified"}`);
-    } catch (err) {
-      if (FATAL.includes(err.status)) throw err;
-      log(`Could not identify competitors: ${err.message}`, "warn");
-    }
-  }
-  await pool(competitors.filter((c) => c.website).slice(0, 3), 3, async (c) => {
-    const page = await readPage(c.website, `competitor ${c.name}`, 2500);
-    if (page) c.siteText = [page.title, page.description, page.text].filter(Boolean).join(" — ").slice(0, 2500);
-  });
-  return { business: null, competitors, searches };
+  return { business, competitors };
 }
 
 // ---------- report ----------
@@ -291,13 +260,9 @@ async function run(intake) {
 
   // 1. Research.
   const { home, pages } = await readWebsite(intake);
-  let found;
-  if (state.config.placesEnabled) found = await findWithPlaces(intake, hostOf(home?.url || "") || ownHost);
-  else if (state.config.searchProvider !== "none") found = await findWithSearch(intake, ownHost);
-  else {
-    log("Local competitor search is not configured, so competitors will be suggested by the AI for the client to confirm.", "warn");
-    found = { business: null, competitors: [], searches: [] };
-  }
+  let found = { business: null, competitors: [] };
+  if (state.config.localSearch) found = await findWithSerpApi(intake, hostOf(home?.url || "") || ownHost);
+  else log("Local search (SerpApi) is not configured, so competitors will be suggested by the AI for the client to confirm.", "warn");
 
   // 2. Build the report on the page section by section.
   const report = $("report");

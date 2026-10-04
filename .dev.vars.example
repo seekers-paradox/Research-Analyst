@@ -1,4 +1,3 @@
 # Optional secrets. For production set them with: npx wrangler secret put NAME
+# SERPAPI_KEY=...                  # Google Maps listing, reviews, and nearby competitors (https://serpapi.com)
 # ACCESS_CODE=choose-a-code        # require this code before anyone can run a report
-# GOOGLE_PLACES_API_KEY=...        # business listing + nearby competitors (Places API (New))
-# BRAVE_API_KEY=...                # web search fallback (https://brave.com/search/api/)

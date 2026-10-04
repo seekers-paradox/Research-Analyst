@@ -1,6 +1,6 @@
-// Fetching pages and running searches from the Worker. Workers on the Free
-// plan get ~10ms of CPU per request, so extraction is plain regex over a
-// capped amount of HTML rather than a full DOM parse.
+// Fetching pages and running Google Maps searches (via SerpApi) from the
+// Worker. Workers on the Free plan get ~10ms of CPU per request, so page
+// extraction is plain regex over a capped amount of HTML.
 
 const MAX_HTML = 400_000;
 const MAX_TEXT = 12_000;
@@ -91,80 +91,71 @@ export async function fetchPage(rawUrl) {
   return { url: finalUrl.href, title, description, text, links, socials };
 }
 
-async function braveSearch(query, apiKey) {
-  const url = new URL("https://api.search.brave.com/res/v1/web/search");
-  url.searchParams.set("q", query);
-  url.searchParams.set("count", "8");
-  const res = await fetch(url, {
-    headers: { Accept: "application/json", "X-Subscription-Token": apiKey },
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok) throw new Error(`Brave Search returned HTTP ${res.status}`);
-  const data = await res.json();
-  return (data.web?.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: stripTags(r.description ?? "") }));
-}
+// ---------- SerpApi (Google Maps results) ----------
+// https://serpapi.com/google-maps-api and https://serpapi.com/google-maps-reviews-api
 
-export async function search(query, env) {
-  const q = String(query ?? "").trim().slice(0, 300);
-  if (!q) throw new Error("Empty search query");
-  // Free search-engine pages block or degrade automated requests from
-  // Cloudflare, so web search needs a Brave Search API key.
-  if (!env.BRAVE_API_KEY) throw new Error("Web search is not configured (set the BRAVE_API_KEY secret).");
-  return { provider: "brave", results: await braveSearch(q, env.BRAVE_API_KEY) };
-}
+async function serpApi(params, env) {
+  if (!env.SERPAPI_KEY) throw new Error("Local search is not configured (set the SERPAPI_KEY secret).");
+  const url = new URL("https://serpapi.com/search.json");
+  for (const [k, v] of Object.entries({ hl: "en", ...params })) url.searchParams.set(k, v);
+  url.searchParams.set("api_key", env.SERPAPI_KEY);
 
-// Google Places (New) Text Search: finds the business's own listing and the
-// nearby businesses in the same category, with ratings and review counts.
-const PLACE_FIELDS = [
-  "places.displayName",
-  "places.formattedAddress",
-  "places.primaryTypeDisplayName",
-  "places.rating",
-  "places.userRatingCount",
-  "places.websiteUri",
-  "places.nationalPhoneNumber",
-  "places.businessStatus",
-  "places.googleMapsUri",
-  "places.regularOpeningHours.weekdayDescriptions",
-];
-
-export async function placesSearch(query, env, { withReviews = false, limit = 8 } = {}) {
-  if (!env.GOOGLE_PLACES_API_KEY) throw new Error("Local business search is not configured (set the GOOGLE_PLACES_API_KEY secret).");
-  const q = String(query ?? "").trim().slice(0, 300);
-  if (!q) throw new Error("Empty search query");
-
-  const fields = withReviews ? [...PLACE_FIELDS, "places.reviews"] : PLACE_FIELDS;
-  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": env.GOOGLE_PLACES_API_KEY,
-      "X-Goog-FieldMask": fields.join(","),
-    },
-    body: JSON.stringify({ textQuery: q, pageSize: Math.min(Math.max(limit, 1), 20) }),
-    signal: AbortSignal.timeout(15_000),
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => ({}));
-    throw new Error(`Google Places returned HTTP ${res.status}${detail.error?.message ? `: ${detail.error.message}` : ""}`);
+  const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    // SerpApi reports "no results" as an error; treat it as an empty result.
+    if (/hasn't returned any results/i.test(data.error ?? "")) return {};
+    throw new Error(`SerpApi: ${data.error || `HTTP ${res.status}`}`);
   }
-  const data = await res.json();
+  return data;
+}
 
-  return (data.places ?? []).map((p) => ({
-    name: p.displayName?.text ?? "",
-    address: p.formattedAddress ?? "",
-    type: p.primaryTypeDisplayName?.text ?? "",
-    rating: p.rating ?? null,
-    reviewCount: p.userRatingCount ?? 0,
-    website: p.websiteUri ?? "",
-    phone: p.nationalPhoneNumber ?? "",
-    status: p.businessStatus ?? "",
-    mapsUrl: p.googleMapsUri ?? "",
-    hours: p.regularOpeningHours?.weekdayDescriptions ?? [],
-    reviews: (p.reviews ?? []).slice(0, 5).map((r) => ({
+function hoursList(p) {
+  const hours = p.operating_hours ?? p.hours;
+  if (Array.isArray(hours)) return hours.flatMap((h) => (typeof h === "object" ? Object.entries(h).map(([d, t]) => `${d}: ${t}`) : [String(h)]));
+  if (hours && typeof hours === "object") return Object.entries(hours).map(([d, t]) => `${d}: ${t}`);
+  return typeof hours === "string" ? [hours] : [];
+}
+
+function normalizePlace(p) {
+  const closed = /permanently closed/i.test(`${p.open_state ?? ""} ${p.business_status ?? ""}`);
+  return {
+    name: p.title ?? "",
+    address: p.address ?? "",
+    type: p.type ?? (Array.isArray(p.types) ? p.types[0] : "") ?? "",
+    rating: typeof p.rating === "number" ? p.rating : null,
+    reviewCount: Number(p.reviews) || 0,
+    website: p.website ?? "",
+    phone: p.phone ?? "",
+    status: closed ? "CLOSED_PERMANENTLY" : "",
+    hours: hoursList(p).slice(0, 7),
+    dataId: p.data_id ?? "",
+    reviews: (p.user_reviews?.most_relevant ?? []).slice(0, 5).map((r) => ({
       rating: r.rating ?? null,
-      when: r.relativePublishTimeDescription ?? "",
-      text: (r.text?.text ?? r.originalText?.text ?? "").slice(0, 600),
+      when: r.date ?? "",
+      text: String(r.description ?? r.snippet ?? "").slice(0, 600),
     })),
+  };
+}
+
+// Google Maps search, e.g. "home builder in Kansas City" or "Century Homes Kansas City".
+export async function mapsSearch(query, env, limit = 10) {
+  const q = String(query ?? "").trim().slice(0, 300);
+  if (!q) throw new Error("Empty search query");
+  const data = await serpApi({ engine: "google_maps", type: "search", q }, env);
+  // A query that matches one business returns place_results instead of a list.
+  if (data.place_results) return [normalizePlace(data.place_results)];
+  return (data.local_results ?? []).slice(0, limit).map(normalizePlace);
+}
+
+// Most relevant Google reviews for one place.
+export async function mapsReviews(dataId, env) {
+  const id = String(dataId ?? "").trim();
+  if (!/^0x[0-9a-f]+:0x[0-9a-f]+$/i.test(id)) throw new Error("Invalid place id");
+  const data = await serpApi({ engine: "google_maps_reviews", data_id: id }, env);
+  return (data.reviews ?? []).slice(0, 8).map((r) => ({
+    rating: r.rating ?? null,
+    when: r.date ?? "",
+    text: String(r.snippet ?? r.extracted_snippet?.original ?? "").slice(0, 600),
   }));
 }

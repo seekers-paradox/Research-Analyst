@@ -1,13 +1,13 @@
 import { AI_EMPLOYEES, validateIntake } from "./intake.js";
-import { competitorsMessages, findingsMessages, reviewMessages, roleMessages } from "./prompts.js";
-import { fetchPage, placesSearch, search } from "./web.js";
+import { findingsMessages, reviewMessages, roleMessages } from "./prompts.js";
+import { fetchPage, mapsReviews, mapsSearch } from "./web.js";
 
 // The browser drives the research one small step at a time. Each step is its
 // own Worker request, which keeps every request inside the Free plan's CPU
 // and subrequest limits. AI output is streamed straight through to the
 // browser without being parsed here.
 
-const MAX_TOKENS = { competitors: 3000, findings: 5000, role: 5000, review: 3000 };
+const MAX_TOKENS = { findings: 5000, role: 5000, review: 3000 };
 
 function json(data, status = 200) {
   return Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
@@ -36,18 +36,6 @@ function cleanPages(pages) {
   }));
 }
 
-function cleanSearches(searches) {
-  if (!Array.isArray(searches)) return [];
-  return searches.slice(0, 10).map((s) => ({
-    query: str(s?.query, 300),
-    results: (Array.isArray(s?.results) ? s.results : []).slice(0, 8).map((r) => ({
-      title: str(r?.title, 300),
-      url: str(r?.url, 500),
-      snippet: str(r?.snippet, 600),
-    })),
-  }));
-}
-
 function cleanPlace(p) {
   if (!p || typeof p !== "object" || !p.name) return null;
   return {
@@ -71,15 +59,12 @@ function cleanPlace(p) {
 
 function buildMessages(body, intake) {
   switch (body.task) {
-    case "competitors":
-      return competitorsMessages(intake, cleanSearches(body.searches));
     case "findings": {
       const r = body.research ?? {};
       return findingsMessages(intake, {
         business: cleanPlace(r.business),
         competitors: (Array.isArray(r.competitors) ? r.competitors : []).slice(0, 6).map(cleanPlace).filter(Boolean),
         pages: cleanPages(r.pages),
-        searches: cleanSearches(r.searches),
       });
     }
     case "role": {
@@ -135,8 +120,7 @@ async function handleApi(request, env, url) {
     return json({
       aiEmployees: AI_EMPLOYEES,
       accessCodeRequired: Boolean(env.ACCESS_CODE),
-      searchProvider: env.BRAVE_API_KEY ? "brave" : "none",
-      placesEnabled: Boolean(env.GOOGLE_PLACES_API_KEY),
+      localSearch: Boolean(env.SERPAPI_KEY),
       model: env.AI_MODEL,
     });
   }
@@ -162,18 +146,17 @@ async function handleApi(request, env, url) {
       } catch (err) {
         return fail(`Could not read ${str(body.url, 200)}: ${err.message}`, 502);
       }
-    case "/api/search":
+    case "/api/local":
       try {
-        return json(await search(body.query, env));
-      } catch (err) {
-        return fail(`Search failed: ${err.message}`, 502);
-      }
-    case "/api/places":
-      try {
-        const places = await placesSearch(body.query, env, { withReviews: body.withReviews === true, limit: Number(body.limit) || 8 });
-        return json({ places });
+        return json({ places: await mapsSearch(body.query, env, Number(body.limit) || 10) });
       } catch (err) {
         return fail(`Local search failed: ${err.message}`, 502);
+      }
+    case "/api/reviews":
+      try {
+        return json({ reviews: await mapsReviews(body.dataId, env) });
+      } catch (err) {
+        return fail(`Could not load reviews: ${err.message}`, 502);
       }
     case "/api/ai":
       return runAi(body, env);
