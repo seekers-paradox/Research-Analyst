@@ -117,6 +117,18 @@ function hoursList(p) {
   return typeof hours === "string" ? [hours] : [];
 }
 
+// Google listings often append tracking parameters to the website link.
+function cleanWebsite(raw) {
+  if (!raw) return "";
+  try {
+    const url = new URL(raw);
+    for (const key of [...url.searchParams.keys()]) if (/^(utm_|gclid|fbclid|y_source)/i.test(key)) url.searchParams.delete(key);
+    return url.toString();
+  } catch {
+    return String(raw);
+  }
+}
+
 function normalizePlace(p) {
   const closed = /permanently closed/i.test(`${p.open_state ?? ""} ${p.business_status ?? ""}`);
   return {
@@ -125,7 +137,7 @@ function normalizePlace(p) {
     type: p.type ?? (Array.isArray(p.types) ? p.types[0] : "") ?? "",
     rating: typeof p.rating === "number" ? p.rating : null,
     reviewCount: Number(p.reviews) || 0,
-    website: p.website ?? "",
+    website: cleanWebsite(p.website),
     phone: p.phone ?? "",
     status: closed ? "CLOSED_PERMANENTLY" : "",
     hours: hoursList(p).slice(0, 7),
