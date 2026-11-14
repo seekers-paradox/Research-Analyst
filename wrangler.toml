@@ -1,0 +1,20 @@
+name = "ai-news-digest"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# When the digest is sent. Cron times are UTC.
+# Default: 13:00 UTC, Monday to Friday. Change the hour to suit your time zone.
+[triggers]
+crons = ["0 13 * * MON-FRI"]
+
+[vars]
+# Claude model used for the "why it matters" summaries.
+CLAUDE_MODEL = "claude-opus-5-5"
+# Most items shown per section.
+MAX_PER_CATEGORY = "5"
+
+# Secrets (set with `npx wrangler secret put <NAME>`, never commit them):
+#   ANTHROPIC_API_KEY        optional - without it the digest is headlines only
+#   GOOGLE_CHAT_WEBHOOK_URL  optional - without it the digest is only on the web page
+#   DIGEST_TOKEN             optional - if set, pages need ?key=<token>
